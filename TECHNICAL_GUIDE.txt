@@ -1,0 +1,570 @@
+================================================================================
+  IPO SURGE INTELLIGENCE — TECHNICAL LEARNER'S GUIDE
+  Architecture, Code Flow, and Design Rationale by Stage
+  RaveMinds Series 2 · Project 3
+================================================================================
+
+Audience: Developers and AI learners who want to understand HOW the system
+works — not just what buttons to click. This document maps UI actions to code
+paths, explains architectural choices, and connects each piece to an AI concept.
+
+Companion doc: LEARNERS_GUIDE.txt (plain-language overview)
+
+
+TABLE OF CONTENTS
+-----------------
+  1. System Architecture Overview
+  2. Shared Infrastructure (Before Any Phase Runs)
+  3. Stage 1 — Pre-IPO Analysis
+  4. Stage 2 — Live Surge Monitoring
+  5. Stage 3 — Post-IPO Audit & Memory Update
+  6. Full Pipeline Orchestration (LangGraph)
+  7. Design Decisions Summary
+  8. Files to Read in Order
+
+
+================================================================================
+1. SYSTEM ARCHITECTURE OVERVIEW
+================================================================================
+
+The application is a three-layer stack:
+
+  ┌─────────────────────────────────────────────────────────────────┐
+  │  PRESENTATION — Streamlit (ui/app.py + ui/components/*)         │
+  │  User selects company, volume, triggers phase actions           │
+  └────────────────────────────┬────────────────────────────────────┘
+                               │ function calls
+  ┌────────────────────────────▼────────────────────────────────────┐
+  │  AGENTS — agents/pre_ipo_agent.py                               │
+  │           agents/live_surge_agent.py                            │
+  │           agents/post_ipo_agent.py                              │
+  │  Each agent orchestrates core engines + LLM for one lifecycle   │
+  └────────────────────────────┬────────────────────────────────────┘
+                               │
+         ┌─────────────────────┼─────────────────────┐
+         ▼                     ▼                     ▼
+  ┌──────────────┐    ┌─────────────────┐    ┌──────────────────┐
+  │ CORE ENGINES │    │ DATA LAYER      │    │ LLM LAYER        │
+  │ simulator    │    │ LanceDB (RAG)   │    │ Ollama + Mistral │
+  │ thresholds   │    │ DuckDB (metrics)│    │ llm_client.py    │
+  │ triage       │    │ JSON baselines  │    │                  │
+  └──────────────┘    └─────────────────┘    └──────────────────┘
+
+WHY THIS SHAPE?
+  • UI stays thin — it renders results, not business logic.
+  • Agents are phase-specific "brains" with focused prompts and tools.
+  • Core engines are deterministic Python — testable without an LLM.
+  • LLM is invoked only where natural language synthesis adds value.
+  • Two databases serve different jobs (explained in Section 2).
+
+Runtime (Docker):
+  docker-compose.yml runs Ollama (port 11434) and the Streamlit app (8501).
+  llm_client.py calls http://localhost:11434/api/generate from the host or
+  container network depending on deployment mode.
+
+
+================================================================================
+2. SHARED INFRASTRUCTURE (BEFORE ANY PHASE RUNS)
+================================================================================
+
+2.1 DATA SEEDING — scripts/seed_data.py
+-----------------------------------------
+On container start, seed_data.py runs before Streamlit:
+
+  init_lancedb()  → embeds historical_events.json into LanceDB
+  init_duckdb()   → creates surge_events, predictions, triage_log tables
+
+WHY: RAG search and post-event SQL audits require populated stores. Seeding
+at startup guarantees a cold start always has historical IPO patterns available.
+
+2.2 LANCEDB — SEMANTIC MEMORY (core/database.py)
+-------------------------------------------------
+Historical events are flattened to text, embedded, and stored:
+
+  text = f"{company} IPO {date}. Peak volume {peak}x. Failures: ..."
+  embedding = SentenceTransformer("all-MiniLM-L6-v2").encode(text)
+
+  table.search(query_vec).limit(top_k)
+
+AI CONCEPT: Vector embeddings + similarity search = RAG retrieval layer.
+WHY LanceDB: Lightweight, file-based, no separate vector DB server needed
+for a learning project. Production might use Pinecone, Weaviate, or pgvector.
+
+2.3 DUCKDB — OPERATIONAL TELEMETRY (core/database.py)
+-----------------------------------------------------
+Structured tables for event timelines:
+
+  surge_events   — every live metric reading (volume, threshold, status)
+  predictions    — pre-IPO forecasts saved for later audit
+  triage_log     — (schema ready for triage persistence)
+
+AI CONCEPT: LLMs are stateless; durable facts live in SQL/analytical stores.
+WHY DuckDB: Embedded OLAP — fast aggregations on surge timelines without
+standing up PostgreSQL. Post-IPO accuracy math runs against these rows.
+
+2.4 SYSTEM BASELINES — data/system_baselines.json
+--------------------------------------------------
+Defines five monitored systems (order_gateway, kafka_consumer, etc.) with:
+  • failure_threshold_multiplier  — volume at which system breaks
+  • normal/max capacity
+  • adaptive_thresholds.volume_bands — lag/latency limits per volume band
+
+WHY JSON config: Ops teams tune thresholds without redeploying agents.
+Simulation and live monitoring both read the same source of truth.
+
+
+================================================================================
+3. STAGE 1 — PRE-IPO ANALYSIS
+================================================================================
+
+TRIGGER: User clicks "Run Pre-IPO Analysis" in ui/app.py
+ENTRY POINT: agents/pre_ipo_agent.py → run_pre_ipo_analysis()
+
+
+3.1 EXECUTION PIPELINE
+----------------------
+
+  run_pre_ipo_analysis(company, expected_max_volume)
+       │
+       ├─► init_lancedb() / init_duckdb()
+       │
+       ├─► search_similar_events(query, top_k=3)     ← RAG retrieval
+       │
+       ├─► run_full_simulation(company)              ← predictive model
+       │
+       ├─► generate_readiness_score(sim, events)     ← weighted scoring
+       │
+       ├─► _get_llm_analysis(...)                    ← LLM synthesis
+       │
+       ├─► _extract_predictions(sim) + save_prediction()  ← persist for audit
+       │
+       └─► _generate_recommendations(...)            ← rule + LLM merge
+
+3.2 RAG RETRIEVAL — WHY IT RUNS FIRST
+--------------------------------------
+Code (pre_ipo_agent.py):
+
+  query = f"{company} IPO high volume surge failure prediction capital markets"
+  similar_events = search_similar_events(query, top_k=3)
+
+The query is embedded with the same MiniLM model used at index time. LanceDB
+returns the three closest historical IPO records (Rivian, Airbnb, etc.).
+
+WHY BEFORE SIMULATION: Historical context informs readiness scoring and is
+injected into the LLM prompt. The AI is asked to reference precedents, not
+invent risks from scratch.
+
+AI CONCEPT: Retrieval-Augmented Generation — retrieve facts, then generate.
+
+3.3 SURGE SIMULATION — core/surge_simulator.py
+------------------------------------------------
+Deterministic predictive engine. No LLM involved.
+
+  SIMULATION_MULTIPLIERS = [10, 50, 100]
+
+For each multiplier, every system in system_baselines.json is evaluated:
+
+  capacity_used_pct = (volume_multiplier / failure_mult) * 100
+
+Status ladder:
+  stable   → volume below 70% of critical threshold
+  warning  → approaching limits
+  critical → near failure point
+  failure  → at/above failure_threshold_multiplier
+
+Each failure gets a typed label (capacity_breach, lag_spike, timeout, etc.).
+
+WHY THREE SCENARIOS: Ops teams think in stress tiers. 10x catches obvious
+gaps; 100x exposes cascade failures. This is discrete event simulation, a
+classic predictive modelling pattern — cheap to run, repeatable in tests.
+
+AI CONCEPT: Predictive AI via simulation, not ML training on live traffic.
+
+3.4 READINESS SCORE — generate_readiness_score()
+-------------------------------------------------
+Weighted composite (surge_simulator.py):
+
+  final = simulation_score * 0.5
+        + historical_score  * 0.3
+        + failure_risk      * 0.2
+
+  failure_risk = max(0, 100 - total_failures * 12)
+
+WHY WEIGHTED BLEND: Pure simulation ignores "Rivian had similar issues."
+Pure history ignores this company's simulated headroom. Blending mirrors
+how human SRE teams combine load tests with incident post-mortems.
+
+3.5 LLM ANALYSIS — core/llm_client.py
+---------------------------------------
+Structured prompt with simulation summary + historical summary → JSON output:
+
+  {
+    "risk_summary": "...",
+    "top_failure_risks": [...],
+    "critical_actions": [...],
+    "confidence_note": "..."
+  }
+
+System prompt (SYSTEM_PRE_IPO): domain expert, must cite historical precedents.
+Temperature 0.2: lower randomness for operational advice.
+
+Fallback (_fallback_llm_analysis): if Ollama is down or JSON parse fails,
+deterministic recommendations from simulation data still render.
+
+WHY LLM HERE: Converts structured sim output into narrative ops guidance.
+WHY JSON: Downstream UI and recommendation merger need typed fields, not prose.
+WHY FALLBACK: Production AI must degrade gracefully — a pattern called
+"LLM optional path" or resilient inference.
+
+3.6 PREDICTION PERSISTENCE — save_prediction()
+----------------------------------------------
+First failure per scenario tier is extracted and written to DuckDB predictions.
+
+WHY: Stage 3 compares these rows against live surge_events to compute accuracy.
+This closes the predict → observe → evaluate loop.
+
+3.7 UI RENDERING — ui/components/pre_ipo_view.py
+--------------------------------------------------
+Displays: readiness gauge, 10x/50x/100x scenario cards, LLM risk summary,
+recommendations list, similar historical events from RAG.
+
+Plotly gauge visualises the composite score — presentation only, no logic.
+
+
+================================================================================
+4. STAGE 2 — LIVE SURGE MONITORING
+================================================================================
+
+TRIGGER: User moves volume slider + clicks "Analyse Current Surge"
+         (or enables 5s auto-refresh) in ui/components/live_surge_view.py
+ENTRY POINT: agents/live_surge_agent.py → run_live_analysis()
+
+
+4.1 EXECUTION PIPELINE
+----------------------
+
+  run_live_analysis(event_id, volume_multiplier, metrics?)
+       │
+       ├─► generate_live_metrics(volume)        ← synthetic live telemetry
+       │
+       ├─► get_adaptive_thresholds(volume)       ← volume-band thresholds
+       │
+       ├─► triage_systems(metrics, volume)     ← priority ranking
+       │
+       ├─► get_confidence_decay(volume)        ← uncertainty signal
+       │
+       ├─► for each metric:
+       │       distinguish_surge_vs_failure()  ← context classification
+       │       log_surge_metric()              ← DuckDB append
+       │
+       ├─► if genuine_failures: _get_llm_situational_summary()
+       │
+       └─► _calculate_overall_status(triage)
+
+4.2 METRIC GENERATION — generate_live_metrics()
+------------------------------------------------
+Simulates realistic telemetry with noise:
+
+  kafka_lag = 500 * (volume ** 1.4) * random(0.85, 1.15)
+  capacity_pct = (volume / failure_mult) * 100 + noise
+
+WHY SUPERLINEAR KAFKA LAG: Message backlogs compound non-linearly under load —
+a deliberate modelling choice to teach that not all metrics scale linearly.
+
+In production, this function would be replaced by Prometheus/Datadog API calls.
+The agent pipeline stays identical.
+
+4.3 ADAPTIVE THRESHOLDS — core/threshold_adapter.py
+----------------------------------------------------
+Volume maps to a band via system_baselines.json:
+
+  normal   → 1x–5x
+  elevated → 5x–15x
+  high     → 15x–40x
+  surge    → 40x–80x
+  critical → 80x+
+
+Each band defines kafka_lag_threshold and latency_threshold_ms.
+
+evaluate_system_health() compares live values against band-specific limits.
+Capacity checks also shift threshold_pct (+0 to +20) by band.
+
+WHY ADAPTIVE: Static alert at lag=5000 would fire constantly during a 50x IPO.
+Raising tolerance under known surge conditions reduces alert fatigue while
+still catching readings that exceed even surge-adjusted limits.
+
+AI CONCEPT: Context-aware monitoring — rules as functions of state, not constants.
+
+4.4 SURGE vs FAILURE — distinguish_surge_vs_failure()
+------------------------------------------------------
+Core classification logic (triage_engine.py):
+
+  healthy                           → expected_surge_behaviour
+  warning + band in [surge, critical] → expected_surge_behaviour  (tolerated)
+  critical                          → genuine_failure
+  else                              → investigate
+
+WHY TWO-AXIS LOGIC: Status (healthy/warning/critical) AND volume band together
+determine classification. A warning at 60x surge may be normal; critical at 60x
+is actionable. This is the project's central "adaptive AI" behaviour.
+
+4.5 TRIAGE ENGINE — triage_systems()
+-------------------------------------
+For each warning/critical reading:
+
+  priority_score = STATUS_WEIGHTS[status] + PRIORITY_WEIGHTS[system]
+
+  kafka_consumer: 10    order_gateway: 9    settlement_engine: 8 ...
+
+Sorted descending → priority_rank 1, 2, 3...
+
+RESOLUTION_PLAYBOOK maps system + failure type → action, ETA, escalate flag.
+
+WHY SCORING NOT LLM: Priority must be deterministic, auditable, and fast.
+LLM is reserved for situational narrative when genuine failures exist.
+This split is a common production pattern: rules for routing, LLM for language.
+
+4.6 CONFIDENCE DECAY — get_confidence_decay()
+----------------------------------------------
+  if volume <= max_historical_volume (67x): confidence = 1.0
+  else: decay toward floor of 0.3
+
+WHY: Historical training data (Rivian ~38x, Airbnb ~52x) doesn't cover 120x.
+The UI warns when confidence < 70%. Honest uncertainty prevents over-trust
+in extrapolated predictions — a form of calibrated AI output.
+
+4.7 CONDITIONAL LLM — _get_llm_situational_summary()
+----------------------------------------------------
+LLM is called ONLY when classification == "genuine_failure".
+
+Prompt includes top 3 triage items → JSON with situation, immediate_action,
+estimated_stabilisation_minutes.
+
+WHY CONDITIONAL: Saves latency and cost during stable surges. LLM adds value
+when humans need a concise briefing under pressure, not on every slider tick.
+
+4.8 TELEMETRY LOG — log_surge_metric()
+--------------------------------------
+Every classification appends one row to surge_events with:
+  event_id, volume, system, metric, value, threshold, status, notes
+
+WHY: Stage 3 audits against this timeline. Without logging, post-IPO analysis
+has nothing to compare predictions against.
+
+
+================================================================================
+5. STAGE 3 — POST-IPO AUDIT & MEMORY UPDATE
+================================================================================
+
+TRIGGER: User clicks "Generate Post-Event Report" in ui/components/post_ipo_view.py
+ENTRY POINT: agents/post_ipo_agent.py → run_post_ipo_analysis()
+
+
+5.1 EXECUTION PIPELINE
+----------------------
+
+  run_post_ipo_analysis(event_id, company, peak_volume)
+       │
+       ├─► audit_predictions(event_id)         ← DuckDB predictions
+       ├─► get_surge_history(event_id)         ← DuckDB surge_events
+       │
+       ├─► _calculate_prediction_accuracy()      ← predict vs actual
+       ├─► _summarise_incidents()               ← critical/warning counts
+       ├─► _extract_lessons()                    ← rule-based lesson objects
+       ├─► _generate_llm_report()                ← executive narrative
+       └─► _update_lancedb_memory()              ← RAG memory write-back
+
+5.2 ACCURACY AUDIT — _calculate_prediction_accuracy()
+-----------------------------------------------------
+For each pre-IPO prediction row:
+
+  actual_failures = history_df[
+      (system_name == pred.system) &
+      (status == "critical")
+  ]
+  was_correct = not actual_failures.empty
+
+Accuracy = correct / total * 100
+
+WHY "critical" AS GROUND TRUTH: Predictions flag failure at a volume tier;
+live phase logs critical status when thresholds are breached. This is a
+simplified but teachable evaluation harness.
+
+AI CONCEPT: Offline evaluation — measure model/agent predictions against
+observed outcomes. Same principle as ML validation, applied to ops forecasts.
+
+5.3 LESSON EXTRACTION — _extract_lessons()
+------------------------------------------
+Rule-based lesson objects (not LLM):
+
+  accuracy >= 80%  → success lesson
+  accuracy < 50%   → improvement lesson
+  missed systems   → gap lesson per system
+  zero criticals   → threshold adaptation success
+
+WHY RULES FIRST: Lessons are structured inputs to the LLM report AND to
+memory update. Deterministic extraction ensures reproducible audit trails.
+
+5.4 LLM REPORT — _generate_llm_report()
+---------------------------------------
+System prompt (SYSTEM_POST_IPO): honest audit, executive-ready tone.
+
+Output JSON:
+  executive_summary, ops_summary, top_lessons,
+  next_event_recommendations, overall_grade (A/B/C/D)
+
+Fallback grades from accuracy thresholds if LLM unavailable.
+
+WHY LLM HERE: Stakeholders need narrative summaries; SQL aggregates don't
+speak to management. The LLM synthesises metrics + lessons into prose.
+
+5.5 MEMORY UPDATE — _update_lancedb_memory()
+--------------------------------------------
+New record appended to ipo_surge_patterns:
+
+  text = f"{company} IPO surge. Peak {peak_volume}x. Accuracy {pct}%. {lessons}"
+  vector = embed(text)
+  table.add([new_record])
+
+WHY WRITE-BACK TO LANCE: Next pre-IPO RAG search will retrieve THIS event
+when a similar company/volume query is made. This implements the learning loop:
+
+  Retrieve → Predict → Observe → Evaluate → Store → Retrieve (richer)
+
+AI CONCEPT: Continuous learning via memory augmentation (not fine-tuning).
+Cheaper and more interpretable than retraining Mistral after each IPO.
+
+
+================================================================================
+6. FULL PIPELINE ORCHESTRATION (LangGraph)
+================================================================================
+
+File: agents/orchestrator.py
+
+While the Streamlit UI runs phases independently (user-driven), orchestrator.py
+defines the complete automated workflow:
+
+  StateGraph(SurgeState)
+    pre_ipo_node      → run_pre_ipo_analysis()
+    live_surge_node   → run_live_analysis()
+    post_ipo_node     → run_post_ipo_analysis()
+
+  route_phase() conditional edges:
+    pre_ipo_complete  → live_surge
+    live_complete     → post_ipo
+    post_ipo_complete → END
+
+  run_full_pipeline(company, expected_max_volume, current_volume)
+
+SurgeState TypedDict carries company, event_id, volumes, and result blobs
+between nodes — shared workflow memory.
+
+WHY LangGraph:
+  • Explicit phase transitions (not implicit call chains)
+  • Error state routing (phase: "error" → END)
+  • Testable graph structure for multi-step agentic workflows
+  • Same pattern used in production agent frameworks
+
+AI CONCEPT: Agent orchestration / state machine for multi-step AI pipelines.
+
+Diagram:
+
+  [START] → pre_ipo → live_surge → post_ipo → [END]
+                ↓           ↓           ↓
+            pre_ipo_result live_result post_ipo_result
+            (stored in SurgeState)
+
+
+================================================================================
+7. DESIGN DECISIONS SUMMARY
+================================================================================
+
+┌──────────────────────────┬─────────────────────────────────────────────────┐
+│ Decision                 │ Reason                                          │
+├──────────────────────────┼─────────────────────────────────────────────────┤
+│ Local Ollama + Mistral   │ Zero API cost; data stays on-prem               │
+│ LanceDB + DuckDB split   │ Vectors for similarity; SQL for timelines       │
+│ Deterministic sim/triage │ Testable, fast, auditable without GPU           │
+│ LLM only for language    │ Rules decide facts; model explains them         │
+│ JSON-constrained LLM     │ UI and agents need parseable structures         │
+│ LLM fallback paths       │ System works when model server is down          │
+│ Phase-specific agents    │ Focused prompts beat one general-purpose bot    │
+│ Adaptive thresholds      │ Surge context changes definition of "normal"    │
+│ Confidence decay         │ Uncertainty signalling beyond historical range    │
+│ Conditional live LLM     │ Invoke model only on genuine failures             │
+│ Memory write-back        │ RAG improves over time without model retraining │
+│ Synthetic metrics        │ Safe learning lab; swap for real APIs in prod   │
+└──────────────────────────┴─────────────────────────────────────────────────┘
+
+
+================================================================================
+8. FILES TO READ IN ORDER
+================================================================================
+
+Suggested code reading path for learners:
+
+  1.  data/historical_events.json      — domain data model
+  2.  data/system_baselines.json       — thresholds and system capacity
+  3.  core/database.py                 — LanceDB + DuckDB dual-store pattern
+  4.  core/surge_simulator.py          — predictive simulation math
+  5.  agents/pre_ipo_agent.py          — Stage 1 orchestration
+  6.  core/threshold_adapter.py        — adaptive threshold logic
+  7.  core/triage_engine.py            — classification + priority ranking
+  8.  agents/live_surge_agent.py       — Stage 2 orchestration
+  9.  agents/post_ipo_agent.py         — Stage 3 audit + memory loop
+  10. core/llm_client.py               — Ollama integration + system prompts
+  11. agents/orchestrator.py           — LangGraph full pipeline
+  12. ui/app.py                        — how UI wires to agents
+  13. tests/test_agents.py             — expected agent behaviour
+
+
+END-TO-END DATA FLOW (ALL THREE STAGES)
+----------------------------------------
+
+  historical_events.json
+         │
+         ▼ embed
+     LanceDB ◄──────────────────────────────┐
+         │                                  │
+         │ RAG search                       │ memory add (Stage 3)
+         ▼                                  │
+  [Stage 1] simulation + LLM                │
+         │                                  │
+         ▼ write                            │
+     DuckDB.predictions                     │
+         │                                  │
+         │                                  │
+  [Stage 2] metrics + classify + triage     │
+         │                                  │
+         ▼ append                           │
+     DuckDB.surge_events                    │
+         │                                  │
+         │                                  │
+  [Stage 3] audit predictions vs events   │
+         │                                  │
+         ├─► accuracy + lessons             │
+         ├─► LLM report                     │
+         └─► LanceDB new event record ──────┘
+
+
+KEY TAKEAWAY FOR AI LEARNERS
+----------------------------
+
+This project is not "one chatbot that monitors IPOs." It is a composed system:
+
+  • Retrieval grounds the model in real precedents (RAG)
+  • Simulation provides predictions without training data (predictive AI)
+  • Adaptive rules encode domain context (adaptive AI)
+  • Agents specialise by lifecycle phase (multi-agent design)
+  • LangGraph sequences the workflow (orchestration)
+  • DuckDB stores ground truth for evaluation (observability)
+  • LanceDB closes the learning loop (memory-augmented improvement)
+  • LLM layers translate structured results into human decisions
+
+That composition — not any single model call — is what production AI systems
+look like in capital markets and other high-stakes operational domains.
+
+
+================================================================================
+  RaveMinds · raveminds.ai · IPO Surge Intelligence · Technical Guide
+================================================================================

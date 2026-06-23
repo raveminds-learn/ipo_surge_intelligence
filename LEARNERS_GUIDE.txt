@@ -1,0 +1,288 @@
+================================================================================
+  IPO SURGE INTELLIGENCE — LEARNER'S GUIDE
+  RaveMinds Series 2 · Project 3
+================================================================================
+
+WHAT IS THIS PROJECT?
+---------------------
+
+Imagine a famous company (like SpaceX or Rivian) going public. On IPO day,
+millions of people try to buy shares at once. Trading systems that normally
+handle steady traffic suddenly face 10x, 50x, or even 100x the usual volume.
+
+Operations teams must spot problems fast, decide what to fix first, and avoid
+alert fatigue — when every alarm goes off and nobody knows what really matters.
+
+This project is a practice lab for that scenario. It is NOT connected to real
+markets. It uses synthetic (fake) data and simulations to teach how AI can help
+before, during, and after a high-volume IPO event.
+
+Everything runs locally on your machine. No cloud API bills. Your data stays
+on your computer.
+
+
+THE REAL-WORLD PROBLEM IT MODELS
+---------------------------------
+
+Static monitoring rules assume "normal" traffic. During an IPO surge, high
+Kafka lag or slow response times might be EXPECTED — not a sign of failure.
+
+This project shows a smarter approach:
+
+  • Predict problems BEFORE the market opens
+  • Adapt "what counts as bad" WHILE volume is spiking
+  • Triage incidents so teams fix the right things first
+  • Learn from the event AFTER it ends and remember for next time
+
+
+HOW TO RUN IT (QUICK)
+---------------------
+
+Docker mode (recommended — one command):
+
+  1. Double-click or run:  start.bat
+  2. Wait for the browser to open at http://localhost:8501
+  3. When finished, run:   stop.bat
+
+The dashboard has three tabs matching the three phases below.
+
+
+THE THREE PHASES — WHAT HAPPENS WHEN YOU USE THE APP
+----------------------------------------------------
+
+PHASE 1 — PRE-IPO (Before the event)
+  You pick a company and expected peak volume. The system:
+
+  • Simulates surge scenarios at 10x, 50x, and 100x normal traffic
+  • Searches historical IPO events similar to yours (Rivian, Airbnb, etc.)
+  • Predicts which systems might fail first (order gateway, Kafka, settlement…)
+  • Scores overall readiness (how prepared you are)
+  • Asks a local AI (Mistral via Ollama) to explain risks in plain language
+  • Saves predictions to a database for later comparison
+
+  Think of it as a "fire drill" before the real crowd arrives.
+
+
+PHASE 2 — LIVE SURGE (During the event)
+  You simulate rising volume in real time. The system:
+
+  • Generates live-style metrics (Kafka lag, CPU capacity, queue depth…)
+  • Adjusts alert thresholds based on current volume band (low / medium / high / critical)
+  • Ranks systems by priority — what needs attention NOW vs what can wait
+  • Distinguishes "expected surge stress" from "genuine failure"
+  • Logs every reading to DuckDB for the post-mortem
+  • Uses AI for situational summaries when real failures are detected
+
+  Think of it as a smart control room that does not panic at every spike.
+
+
+PHASE 3 — POST-IPO (After the event)
+  When the surge is over, the system:
+
+  • Compares pre-IPO predictions to what actually happened
+  • Calculates prediction accuracy (did we call the right failures?)
+  • Summarises incidents and extracts lessons learned
+  • Updates LanceDB memory with new patterns for future events
+  • Generates a management-style report via the local LLM
+
+  Think of it as a retrospective that makes the AI smarter for next time.
+
+
+KEY AI & SOFTWARE CONCEPTS YOU ARE LEARNING
+-------------------------------------------
+
+1. LOCAL LARGE LANGUAGE MODEL (LLM)
+   Instead of calling OpenAI or Claude in the cloud, this project uses Ollama
+   to run Mistral 7B on your machine. The LLM reads structured data (simulation
+   results, metrics, history) and returns human-readable analysis.
+
+   Why it matters: Sensitive financial ops data never leaves your infrastructure.
+   Cost is zero per query once the model is downloaded.
+
+
+2. PREDICTIVE AI (NOT JUST REACTIVE ALERTS)
+   Traditional monitoring reacts when something breaks. The pre-IPO phase
+   SIMULATES future load and estimates time-to-failure for each system.
+
+   Why it matters: Teams can pre-scale pods, warm Kafka consumers, or adjust
+   timeouts before customers feel pain.
+
+
+3. ADAPTIVE / DYNAMIC THRESHOLDS
+   A Kafka lag of 50,000 messages might be fine at 40x volume but critical
+   at 2x volume. The threshold_adapter module changes limits based on volume
+   bands (normal → elevated → high → critical).
+
+   Why it matters: Reduces false alarms during legitimate surges while still
+   catching real outages.
+
+
+4. CONFIDENCE DECAY
+   As simulated volume drifts far from what was expected, the system's
+   confidence in its predictions drops. The AI becomes more honest about
+   uncertainty when conditions change.
+
+   Why it matters: Good AI systems should say "I'm less sure now" instead of
+   sounding equally confident in chaos.
+
+
+5. RETRIEVAL-AUGMENTED GENERATION (RAG)
+   Before asking the LLM a question, the app searches LanceDB for similar past
+   IPO events using vector embeddings (sentence-transformers). Those real
+   examples are injected into the prompt.
+
+   Why it matters: The AI grounds its advice in actual historical outcomes, not
+   only generic knowledge.
+
+
+6. VECTOR DATABASE (LanceDB)
+   Historical events are converted to numbers (embeddings) that capture meaning.
+   Similar events are found by mathematical closeness, not keyword matching.
+
+   Why it matters: "Find me IPOs like this one where Kafka lag was a problem"
+   becomes a fast semantic search.
+
+
+7. STRUCTURED ANALYTICS DATABASE (DuckDB)
+   Every live metric, threshold, and status is logged in DuckDB — a lightweight
+   analytical database. Post-IPO audits query this data with SQL-like logic.
+
+   Why it matters: AI needs reliable facts; DuckDB stores the timeline of what
+   happened during the surge.
+
+
+8. MULTI-AGENT ARCHITECTURE
+   Three specialized agents handle different jobs:
+     • pre_ipo_agent   — simulation and readiness
+     • live_surge_agent — monitoring and triage
+     • post_ipo_agent  — audit and memory update
+
+   Each agent has its own system prompt and tools (database, simulator, etc.).
+
+   Why it matters: One giant prompt does everything poorly. Specialized agents
+   mirror how real ops teams divide responsibilities.
+
+
+9. AGENT ORCHESTRATION (LangGraph)
+   orchestrator.py wires agents into a state machine: Pre-IPO → Live Surge →
+   Post-IPO. State (company name, volumes, results) flows between steps.
+
+   Why it matters: Complex workflows need explicit routing, error handling, and
+   shared memory — LangGraph provides that graph structure.
+
+
+10. TRIAGE ENGINE
+    When many systems show stress, triage_engine scores and ranks them using
+    weights (Kafka might outrank a non-critical risk check). It also attaches
+    resolution playbooks ("scale pods", "restart consumer group").
+
+    Why it matters: AI must help humans decide ORDER of operations, not just
+    list problems.
+
+
+11. SURGE vs FAILURE CLASSIFICATION
+    Not every high metric is a bug. During an IPO, some degradation is normal.
+    The system labels readings as expected_surge, warning, or genuine_failure.
+
+    Why it matters: This is the core "adaptive" behaviour — context-aware
+    alerting instead of one-size-fits-all rules.
+
+
+12. MEMORY UPDATE (CONTINUOUS LEARNING LOOP)
+    After post-IPO analysis, new lessons are written back into LanceDB so the
+    next pre-IPO search finds richer patterns.
+
+    Why it matters: Closes the loop from prediction → reality → improved
+    knowledge base. This is how production AI systems get better over time.
+
+
+13. STRUCTURED LLM OUTPUT (JSON)
+    Agents ask Mistral to respond in JSON with specific fields (risk_summary,
+    top_failure_risks, recommendations). Code parses that JSON reliably.
+
+    Why it matters: LLMs speak natural language; applications need structured
+    data. JSON mode + parsing bridges the two.
+
+
+14. CONTAINERISED LOCAL AI STACK (Docker)
+    Docker Compose runs Ollama (model server) and the Streamlit app together.
+    start.bat checks dependencies and launches Docker Desktop automatically.
+
+    Why it matters: Reproducible environments — learners get the same stack
+    without manual install headaches.
+
+
+WHAT EACH MAIN FOLDER DOES
+--------------------------
+
+agents/          AI agents for each phase + LangGraph orchestrator
+core/            Engines: simulation, thresholds, triage, database, LLM client
+data/            Historical IPO events, system baselines, vector + SQL stores
+ui/              Streamlit dashboard you interact with
+scripts/         seed_data.py — loads initial data into databases
+tests/           Automated checks that agents behave correctly
+
+
+SUGGESTED LEARNING PATH
+-----------------------
+
+1. Run start.bat and explore all three dashboard tabs with default settings.
+2. Read data/historical_events.json — see real-style IPO failure stories.
+3. Run Pre-IPO for "SpaceX" at 100x and read the readiness score + predictions.
+4. Switch to Live Surge, increase volume slider, watch triage rankings change.
+5. Open core/threshold_adapter.py — see how volume bands shift thresholds.
+6. Run Post-IPO and compare prediction accuracy to what Live Surge logged.
+7. Read agents/orchestrator.py — follow the Pre → Live → Post graph.
+8. Optional: run tests with  python -m pytest tests/
+
+
+GLOSSARY (PLAIN ENGLISH)
+------------------------
+
+IPO          Initial Public Offering — company's first day of public trading
+Surge        Sudden spike in traffic or orders
+Kafka lag    Backlog of unprocessed messages in a streaming pipeline
+Threshold    The line between "OK" and "alert"
+Triage       Sorting problems by urgency (like hospital ER)
+Embedding    A list of numbers representing meaning of text for similarity search
+RAG          Retrieval-Augmented Generation — fetch facts first, then ask LLM
+Agent        A program that uses AI + tools to accomplish a focused task
+LLM          Large Language Model — AI that understands and generates text
+Ollama       Software to run open-source LLMs locally
+Mistral      An open-source language model used in this project
+LangGraph    Library for building multi-step AI workflows as graphs
+LanceDB      Vector database for similarity search
+DuckDB       Fast analytical database for metrics and logs
+Streamlit    Python framework for quick data dashboards
+
+
+WHY THIS PROJECT EXISTS (BIG PICTURE)
+-------------------------------------
+
+RaveMinds Series 2 teaches capital-markets AI patterns:
+
+  Project 1 — Human in the Loop (compliance copilot)
+  Project 2 — Autonomous Agentic Loop (settlement alerts)
+  Project 3 — Predictive + Adaptive AI (this project)
+
+Together they show that modern ops AI is not one chatbot. It is pipelines of
+specialised agents, local models, adaptive rules, historical memory, and human
+dashboards — working as a system.
+
+You are learning to design AI that predicts, adapts under stress, and improves
+after every event. That pattern applies far beyond IPOs: product launches,
+Black Friday e-commerce, vaccine rollouts, and any "thundering herd" scenario.
+
+
+QUESTIONS TO ASK YOURSELF AS YOU EXPLORE
+----------------------------------------
+
+  • What would happen if we used fixed thresholds instead of adaptive ones?
+  • How does RAG change the quality of pre-IPO advice vs raw LLM guesses?
+  • Why split work across three agents instead of one mega-prompt?
+  • When should confidence decay trigger human escalation?
+  • What would you add to the memory store after a bad prediction?
+
+================================================================================
+  Happy learning — RaveMinds · raveminds.ai
+================================================================================
