@@ -1,0 +1,91 @@
+[
+  {
+    "event_id": "IPO_RIVIAN_2021",
+    "company": "Rivian",
+    "date": "2021-11-10",
+    "peak_volume_multiplier": 38,
+    "duration_minutes": 180,
+    "failures": [
+      {"system": "order_gateway", "failure_type": "capacity_breach", "time_to_fail_minutes": 12, "volume_at_failure": 22},
+      {"system": "kafka_consumer", "failure_type": "lag_spike", "time_to_fail_minutes": 8, "volume_at_failure": 15}
+    ],
+    "resolution_actions": [
+      "Scaled order gateway pods from 4 to 18",
+      "Restarted Kafka consumer group B",
+      "Enabled circuit breaker on order validation"
+    ],
+    "readiness_score_pre": 71,
+    "actual_outcome": "Degraded — recovered in 34 minutes",
+    "lessons": "Kafka lag underestimated at high volume. Pre-warm consumer groups before open."
+  },
+  {
+    "event_id": "IPO_AIRBNB_2020",
+    "company": "Airbnb",
+    "date": "2020-12-10",
+    "peak_volume_multiplier": 52,
+    "duration_minutes": 240,
+    "failures": [
+      {"system": "settlement_engine", "failure_type": "timeout", "time_to_fail_minutes": 45, "volume_at_failure": 48},
+      {"system": "risk_engine", "failure_type": "queue_overflow", "time_to_fail_minutes": 30, "volume_at_failure": 35}
+    ],
+    "resolution_actions": [
+      "Increased settlement timeout threshold to 60s",
+      "Scaled risk engine workers to 24",
+      "Enabled async risk scoring for retail orders"
+    ],
+    "readiness_score_pre": 58,
+    "actual_outcome": "Major incident — 67 minutes downtime",
+    "lessons": "Settlement engine timeout too aggressive. Risk engine async mode critical above 30x volume."
+  },
+  {
+    "event_id": "IPO_DOORDASH_2020",
+    "company": "DoorDash",
+    "date": "2020-12-09",
+    "peak_volume_multiplier": 29,
+    "duration_minutes": 150,
+    "failures": [
+      {"system": "order_gateway", "failure_type": "memory_pressure", "time_to_fail_minutes": 25, "volume_at_failure": 26}
+    ],
+    "resolution_actions": [
+      "Restarted order gateway with increased heap",
+      "Enabled request throttling at 28x volume"
+    ],
+    "readiness_score_pre": 82,
+    "actual_outcome": "Minor incident — recovered in 18 minutes",
+    "lessons": "Memory pressure underestimated. JVM heap tuning required pre-event."
+  },
+  {
+    "event_id": "IPO_COINBASE_2021",
+    "company": "Coinbase",
+    "date": "2021-04-14",
+    "peak_volume_multiplier": 67,
+    "duration_minutes": 360,
+    "failures": [
+      {"system": "order_gateway", "failure_type": "capacity_breach", "time_to_fail_minutes": 6, "volume_at_failure": 18},
+      {"system": "kafka_consumer", "failure_type": "lag_spike", "time_to_fail_minutes": 4, "volume_at_failure": 12},
+      {"system": "settlement_engine", "failure_type": "timeout", "time_to_fail_minutes": 22, "volume_at_failure": 45},
+      {"system": "eks_pods", "failure_type": "oomkilled", "time_to_fail_minutes": 15, "volume_at_failure": 30}
+    ],
+    "resolution_actions": [
+      "Emergency pod scaling across all namespaces",
+      "Kafka consumer group restart",
+      "Settlement circuit breaker activated",
+      "Rate limiting at API gateway"
+    ],
+    "readiness_score_pre": 44,
+    "actual_outcome": "Critical incident — 2+ hours degradation",
+    "lessons": "Most critical IPO event on record. Full pre-event simulation essential. All systems need headroom for 70x+."
+  },
+  {
+    "event_id": "IPO_ROBLOX_2021",
+    "company": "Roblox",
+    "date": "2021-03-10",
+    "peak_volume_multiplier": 31,
+    "duration_minutes": 210,
+    "failures": [],
+    "resolution_actions": [],
+    "readiness_score_pre": 89,
+    "actual_outcome": "Smooth — no incidents",
+    "lessons": "Pre-event simulation at 40x + pre-warm strategy was the difference. Best practice benchmark."
+  }
+]

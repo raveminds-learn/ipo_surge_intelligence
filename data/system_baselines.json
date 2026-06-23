@@ -1,0 +1,63 @@
+{
+  "systems": {
+    "order_gateway": {
+      "name": "Order Gateway",
+      "normal_capacity_rps": 1000,
+      "max_capacity_rps": 8000,
+      "failure_threshold_multiplier": 8,
+      "critical_threshold_multiplier": 6,
+      "recovery_time_minutes": 8,
+      "scale_time_minutes": 3,
+      "memory_baseline_mb": 2048,
+      "cpu_baseline_percent": 35
+    },
+    "settlement_engine": {
+      "name": "Settlement Engine",
+      "normal_capacity_rps": 500,
+      "max_capacity_rps": 3000,
+      "failure_threshold_multiplier": 6,
+      "critical_threshold_multiplier": 4,
+      "recovery_time_minutes": 15,
+      "scale_time_minutes": 8,
+      "memory_baseline_mb": 4096,
+      "cpu_baseline_percent": 45
+    },
+    "kafka_consumer": {
+      "name": "Kafka Consumer",
+      "normal_lag_messages": 500,
+      "critical_lag_messages": 10000,
+      "failure_lag_messages": 50000,
+      "consumer_groups": ["group_a", "group_b", "group_c"],
+      "recovery_time_minutes": 5,
+      "scale_time_minutes": 2
+    },
+    "risk_engine": {
+      "name": "Risk Engine",
+      "normal_capacity_rps": 800,
+      "max_capacity_rps": 5000,
+      "failure_threshold_multiplier": 6,
+      "critical_threshold_multiplier": 5,
+      "recovery_time_minutes": 10,
+      "scale_time_minutes": 5,
+      "memory_baseline_mb": 3072,
+      "cpu_baseline_percent": 55
+    },
+    "eks_pods": {
+      "name": "EKS Pods",
+      "normal_pod_count": 12,
+      "max_pod_count": 100,
+      "oomkill_threshold_mb": 7168,
+      "recovery_time_minutes": 3,
+      "scale_time_minutes": 2
+    }
+  },
+  "adaptive_thresholds": {
+    "volume_bands": {
+      "normal": {"min": 0, "max": 5, "lag_threshold": 500, "latency_threshold_ms": 200},
+      "elevated": {"min": 5, "max": 15, "lag_threshold": 2000, "latency_threshold_ms": 500},
+      "high": {"min": 15, "max": 30, "lag_threshold": 8000, "latency_threshold_ms": 1000},
+      "surge": {"min": 30, "max": 60, "lag_threshold": 20000, "latency_threshold_ms": 2000},
+      "critical": {"min": 60, "max": 999, "lag_threshold": 40000, "latency_threshold_ms": 5000}
+    }
+  }
+}
